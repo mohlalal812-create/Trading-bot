@@ -297,12 +297,33 @@ def check_pair(pair):
     trend = "↑" if fast_now > slow_now else "↓"
     print(f"[{name}] {price}  EMA9={fast_now:.5g}  EMA21={slow_now:.5g}  RSI={cur_rsi:.1f}  {trend}")
 
-    # Detect crossover direction
+    global last_update_time
+    now_ts = time.time()
+    if now_ts - last_update_time >= 1800:
+        last_update_time = now_ts
+        lines = []
+        for p in PAIRS:
+            pname = p["name"]
+            ls = last_signals.get(pname, "none")
+            ps = win_rate_stats.get(pname, {})
+            total = ps.get("wins", 0) + ps.get("losses", 0)
+            wr = f"{int(ps.get('wins',0)/total*100)}%" if total > 0 else "N/A"
+            lines.append(f"{pname}: {ls.upper()} | WR: {wr}")
+        send("📊 HOURLY UPDATE\n━━━━━━━━━━━━━━━━━━━━\n" + "\n".join(lines))
+
+    # Detect crossover OR strong trend
     direction = None
+    gap = abs(fast_now - slow_now)
+    strong_gap = gap > (cur_atr * 0.1)
+
     if fast_prev <= slow_prev and fast_now > slow_now:
-        direction = "BUY"
+        direction = "BUY"   # fresh crossover
     elif fast_prev >= slow_prev and fast_now < slow_now:
-        direction = "SELL"
+        direction = "SELL"  # fresh crossover
+    elif fast_now > slow_now and strong_gap:
+        direction = "BUY"   # strong uptrend
+    elif fast_now < slow_now and strong_gap:
+        direction = "SELL"  # strong downtrend
 
     if not direction or last_signals.get(name) == direction:
         return
@@ -314,7 +335,7 @@ def check_pair(pair):
     )
 
     # Only send if score >= 3 (filter out very weak signals)
-    if score < 3:
+    if score < 2:
         print(f"[{name}] Signal filtered out — score {score}/9")
         return
 
