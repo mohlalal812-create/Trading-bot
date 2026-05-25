@@ -7,6 +7,7 @@ from flask import Flask
 import threading
 import time
 import requests
+from datetime import datetime, timezone
 
 app = Flask(__name__)
 
@@ -21,10 +22,11 @@ INTERVAL       = "1min"
 SMA_PERIOD     = 20
 ATR_PERIOD     = 14
 ATR_SL_MULT    = 1.5
-ATR_TP1_MULT   = 1.5   # TP1 = 1:1 risk reward
-ATR_TP2_MULT   = 3.0   # TP2 = 1:2 risk reward
+ATR_TP1_MULT   = 1.5
+ATR_TP2_MULT   = 3.0
 CHECK_EVERY    = 30
 STRONG_THRESH  = 0.5
+NEWS_WARN_MINS = 30   # warn this many minutes before high-impact news
 
 
 # ── NOTIFICATIONS ─────────────────────────────────────────────────────────────
@@ -42,6 +44,78 @@ def send(msg: str):
             requests.post(url, data={"chat_id": CHAT_ID, "text": msg}, timeout=5)
         except Exception as e:
             print(f"[Telegram error] {e}")
+
+
+# ── NEWS CALENDAR ─────────────────────────────────────────────────────────────
+
+alerted_news = set()   # track which events we've already alerted
+
+# Keywords that directly impact gold
+GOLD_KEYWORDS = [
+    "non-farm", "nfp", "interest rate", "fed", "fomc", "cpi", "inflation",
+    "gdp", "unemployment", "payroll", "pce", "powell", "treasury", "reserve",
+    "gold", "xau", "jobs", "retail sales", "ism"
+]
+
+def fetch_news():
+    try:
+        url  = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
+        resp = requests.get(url, timeout=10)
+        return resp.json()
+    except Exception as e:
+        print(f"[News fetch error] {e}")
+        return []
+
+def check_news():
+    events = fetch_news()
+    if not events:
+        return
+
+    now = datetime.now(timezone.utc)
+
+    for event in events:
+        # Only care about high impact USD events
+        if event.get("impact") != "High":
+            continue
+        if event.get("country", "").upper() != "USD":
+            continue
+
+        title = event.get("title", "")
+        date  = event.get("date", "")
+        etime = event.get("time", "")
+
+        # Parse event datetime
+        try:
+            dt_str   = f"{date} {etime}"
+            event_dt = datetime.strptime(dt_str, "%Y-%m-%d %I:%M%p").replace(tzinfo=timezone.utc)
+        except Exception:
+            continue
+
+        mins_away = (event_dt - now).total_seconds() / 60
+
+        # Alert if event is within the warning window and not yet alerted
+        if 0 < mins_away <= NEWS_WARN_MINS:
+            key = f"{date}_{etime}_{title}"
+            if key not in alerted_news:
+                alerted_news.add(key)
+
+                # Check if it's directly gold-relevant
+                is_gold = any(kw in title.lower() for kw in GOLD_KEYWORDS)
+                impact_note = "⚠️ MAJOR GOLD IMPACT" if is_gold else "⚠️ USD HIGH IMPACT"
+
+                forecast = event.get("forecast", "N/A")
+                previous = event.get("previous", "N/A")
+
+                send(
+                    f"📰 UPCOMING NEWS ALERT\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n"
+                    f"Event:    {title}\n"
+                    f"Time:     {etime} UTC  (~{int(mins_away)}min away)\n"
+                    f"Forecast: {forecast}\n"
+                    f"Previous: {previous}\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n"
+                    f"{impact_note} — Consider closing or pausing trades"
+                )
 
 
 # ── PRICE DATA ────────────────────────────────────────────────────────────────
@@ -161,45 +235,30 @@ def check_signal():
         f"ATR={current_atr:.2f}  RSI={current_rsi:.1f}  {trend}"
     )
 
-    # ── BUY crossover ──
     if prev_price <= prev_sma and current_price > current_sma:
         if last_signal != "BUY":
             last_signal = "BUY"
             sl  = round(current_price - sl_dist, 2)
             tp1 = round(current_price + tp1_dist, 2)
             tp2 = round(current_price + tp2_dist, 2)
-
             if is_strong and current_rsi < 55:
-                label = "STRONG BUY SIGNAL"
-                emoji = "🔥"
-                note  = "Strong momentum — full position ok"
+                label, emoji, note = "STRONG BUY SIGNAL", "🔥", "Strong momentum — full position ok"
             else:
-                label = "WEAK BUY SIGNAL"
-                emoji = "📈"
-                note  = "Low momentum — reduce size, wait for TP1 first"
-
+                label, emoji, note = "WEAK BUY SIGNAL", "📈", "Low momentum — reduce size, wait for TP1 first"
             send(format_signal("BUY", label, emoji, current_price, sl, tp1, tp2, current_rsi, note))
 
-    # ── SELL crossover ──
     elif prev_price >= prev_sma and current_price < current_sma:
         if last_signal != "SELL":
             last_signal = "SELL"
             sl  = round(current_price + sl_dist, 2)
             tp1 = round(current_price - tp1_dist, 2)
             tp2 = round(current_price - tp2_dist, 2)
-
             if is_strong and current_rsi > 45:
-                label = "STRONG SELL SIGNAL"
-                emoji = "🔥"
-                note  = "Strong momentum — full position ok"
+                label, emoji, note = "STRONG SELL SIGNAL", "🔥", "Strong momentum — full position ok"
             else:
-                label = "WEAK SELL SIGNAL"
-                emoji = "📉"
-                note  = "Low momentum — reduce size, wait for TP1 first"
-
+                label, emoji, note = "WEAK SELL SIGNAL", "📉", "Low momentum — reduce size, wait for TP1 first"
             send(format_signal("SELL", label, emoji, current_price, sl, tp1, tp2, current_rsi, note))
 
-    # ── Strong trend (no crossover yet) ──
     elif is_strong:
         direction = "BUY" if current_price > current_sma else "SELL"
         if last_signal != f"TREND_{direction}":
@@ -223,11 +282,13 @@ def bot_loop():
     send(
         f"🤖 XAUUSD Signal Bot started\n"
         f"Strategy: {SMA_PERIOD}-SMA + ATR + RSI\n"
+        f"News alerts: {NEWS_WARN_MINS}min before high-impact USD events\n"
         f"Checking every {CHECK_EVERY}s"
     )
 
     while True:
         try:
+            check_news()
             check_signal()
         except Exception as e:
             print(f"[Loop error] {e}")
