@@ -465,6 +465,91 @@ def check_news():
                  f"⚡ Wait for candle to close before entering")
 
 
+
+# ── TRADING ECONOMICS NEWS ────────────────────────────────────────────────────
+from bs4 import BeautifulSoup
+
+te_seen_headlines = set()
+
+TE_KEYWORDS = [
+    "gold", "xau", "silver", "xag", "dollar", "usd", "fed", "federal reserve",
+    "interest rate", "inflation", "cpi", "gdp", "payroll", "nfp", "fomc",
+    "powell", "oil", "crude", "euro", "pound", "yen", "bitcoin", "btc",
+    "recession", "rate hike", "rate cut", "treasury", "bond", "jobs"
+]
+
+BULLISH_WORDS = ["rise", "rises", "rose", "surges", "jumps", "gains", "rally",
+                 "climbs", "higher", "beats", "strong", "hawkish", "rate hike",
+                 "above forecast", "better than expected"]
+
+BEARISH_WORDS = ["fall", "falls", "fell", "drops", "decline", "slips", "lower",
+                 "misses", "weak", "dovish", "rate cut", "below forecast",
+                 "worse than expected", "recession", "slowdown"]
+
+def te_sentiment(headline):
+    h = headline.lower()
+    bull = sum(1 for w in BULLISH_WORDS if w in h)
+    bear = sum(1 for w in BEARISH_WORDS if w in h)
+    if bull > bear:   return "📈 Bullish", "🟢"
+    if bear > bull:   return "📉 Bearish", "🔴"
+    return "➡️ Neutral", "🟡"
+
+def check_te_news():
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    try:
+        resp = requests.get("https://tradingeconomics.com/stream", headers=headers, timeout=15)
+        soup = BeautifulSoup(resp.text, "lxml")
+        items = soup.select("div.te-stream-item, article, div.stream-item, div[class*='stream']")
+
+        if not items:
+            # fallback — try finding any news-like divs
+            items = soup.find_all("div", class_=lambda c: c and "stream" in c.lower())
+
+        new_count = 0
+        for item in items[:20]:
+            headline = item.get_text(separator=" ", strip=True)
+            if not headline or len(headline) < 20:
+                continue
+
+            # Filter for relevant keywords
+            h_lower = headline.lower()
+            if not any(kw in h_lower for kw in TE_KEYWORDS):
+                continue
+
+            # Deduplicate
+            key = headline[:80]
+            if key in te_seen_headlines:
+                continue
+            te_seen_headlines.add(key)
+            new_count += 1
+
+            # Determine sentiment
+            sentiment, s_icon = te_sentiment(headline)
+
+            # Truncate long headlines
+            display = headline[:200] + "..." if len(headline) > 200 else headline
+
+            send(
+                f"📡 TRADING ECONOMICS NEWS\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"{display}\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"Sentiment: {s_icon} {sentiment}\n"
+                f"Source: Trading Economics"
+            )
+
+            if new_count >= 3:  # max 3 new items per check
+                break
+
+        if new_count == 0:
+            print("[TE] No new relevant news")
+
+    except Exception as e:
+        print(f"[TE error] {e}")
+
 # ── MAIN LOOP ─────────────────────────────────────────────────────────────────
 def bot_loop():
     print("Bot started.")
@@ -475,6 +560,7 @@ def bot_loop():
     while True:
         try:
             check_news()
+            check_te_news()
             for pair in PAIRS:
                 try: check_pair(pair)
                 except Exception as e: print(f"[{pair['name']} error] {e}")
@@ -508,4 +594,3 @@ def run():
 
 if __name__ == "__main__":
     run()
-
