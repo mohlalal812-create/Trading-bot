@@ -4,10 +4,10 @@ import time
 import requests
 import os
 
-app = Flask(__name__)
+app = Flask(__LUCAS__)
 
 # --- CONFIG (set these as environment variables, never hardcode) ---
-DISCORD_WEBHOOK = os.getenv("DISCORD_WEBHOOK", "")
+DISCORD_WEBHOOK = os.getenv("LUASSON_WEBHOOK", "")
 TELEGRAM_TOKEN  = os.getenv("TELEGRAM_TOKEN", "")
 CHAT_ID         = os.getenv("CHAT_ID", "")
 TWELVE_API_KEY  = os.getenv("TWELVE_API_KEY", "")   # free at twelvedata.com
