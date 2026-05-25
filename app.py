@@ -21,11 +21,10 @@ INTERVAL       = "1min"
 SMA_PERIOD     = 20
 ATR_PERIOD     = 14
 ATR_SL_MULT    = 1.5
-ATR_TP_MULT    = 3.0
-CHECK_EVERY    = 30   # seconds
-
-# Momentum threshold: % of ATR that separates strong vs weak signal
-STRONG_THRESH  = 0.5   # candle move > 0.5x ATR = strong
+ATR_TP1_MULT   = 1.5   # TP1 = 1:1 risk reward
+ATR_TP2_MULT   = 3.0   # TP2 = 1:2 risk reward
+CHECK_EVERY    = 30
+STRONG_THRESH  = 0.5
 
 
 # ── NOTIFICATIONS ─────────────────────────────────────────────────────────────
@@ -104,6 +103,28 @@ def rsi(closes, period=14):
     return 100 - (100 / (1 + rs))
 
 
+# ── SIGNAL FORMAT ─────────────────────────────────────────────────────────────
+
+def format_signal(direction, label, emoji, entry, sl, tp1, tp2, rsi_val, note):
+    sl_pips  = round(abs(entry - sl), 2)
+    tp1_pips = round(abs(entry - tp1), 2)
+    tp2_pips = round(abs(entry - tp2), 2)
+    return (
+        f"{emoji} {label}\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"Pair:    XAUUSD\n"
+        f"Action:  {direction}\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"Entry:   {entry:.2f}\n"
+        f"SL:      {sl:.2f}  (-{sl_pips})\n"
+        f"TP1:     {tp1:.2f}  (+{tp1_pips})  🎯\n"
+        f"TP2:     {tp2:.2f}  (+{tp2_pips})  🚀\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"RSI:     {rsi_val:.1f}\n"
+        f"Note:    {note}"
+    )
+
+
 # ── SIGNAL LOGIC ──────────────────────────────────────────────────────────────
 
 last_signal = None
@@ -127,13 +148,13 @@ def check_signal():
     current_atr   = atr(highs, lows, closes, ATR_PERIOD)
     current_rsi   = rsi(closes)
 
-    candle_move   = abs(current_price - prev_price)
-    is_strong     = candle_move > (current_atr * STRONG_THRESH)
+    candle_move = abs(current_price - prev_price)
+    is_strong   = candle_move > (current_atr * STRONG_THRESH)
 
-    sl_dist = current_atr * ATR_SL_MULT
-    tp_dist = current_atr * ATR_TP_MULT
+    sl_dist  = current_atr * ATR_SL_MULT
+    tp1_dist = current_atr * ATR_TP1_MULT
+    tp2_dist = current_atr * ATR_TP2_MULT
 
-    # ── Log current price every check ──
     trend = "↑" if current_price > current_sma else "↓"
     print(
         f"[Live] XAUUSD={current_price:.2f}  SMA={current_sma:.2f}  "
@@ -144,67 +165,54 @@ def check_signal():
     if prev_price <= prev_sma and current_price > current_sma:
         if last_signal != "BUY":
             last_signal = "BUY"
-            sl = round(current_price - sl_dist, 2)
-            tp = round(current_price + tp_dist, 2)
+            sl  = round(current_price - sl_dist, 2)
+            tp1 = round(current_price + tp1_dist, 2)
+            tp2 = round(current_price + tp2_dist, 2)
 
             if is_strong and current_rsi < 55:
-                label = "🔥 STRONG BUY SIGNAL"
-                note  = f"RSI={current_rsi:.1f} — Strong momentum, good trend confirmation"
+                label = "STRONG BUY SIGNAL"
+                emoji = "🔥"
+                note  = "Strong momentum — full position ok"
             else:
-                label = "📈 WEAK BUY SIGNAL"
-                note  = f"RSI={current_rsi:.1f} — Crossover detected but momentum is low, trade with caution"
+                label = "WEAK BUY SIGNAL"
+                emoji = "📈"
+                note  = "Low momentum — reduce size, wait for TP1 first"
 
-            send(
-                f"{label}\n"
-                f"━━━━━━━━━━━━━━━━━━\n"
-                f"Pair:  XAUUSD\n"
-                f"Price: {current_price:.2f}\n"
-                f"SL:    {sl}\n"
-                f"TP:    {tp}\n"
-                f"━━━━━━━━━━━━━━━━━━\n"
-                f"{note}"
-            )
+            send(format_signal("BUY", label, emoji, current_price, sl, tp1, tp2, current_rsi, note))
 
     # ── SELL crossover ──
     elif prev_price >= prev_sma and current_price < current_sma:
         if last_signal != "SELL":
             last_signal = "SELL"
-            sl = round(current_price + sl_dist, 2)
-            tp = round(current_price - tp_dist, 2)
+            sl  = round(current_price + sl_dist, 2)
+            tp1 = round(current_price - tp1_dist, 2)
+            tp2 = round(current_price - tp2_dist, 2)
 
             if is_strong and current_rsi > 45:
-                label = "🔥 STRONG SELL SIGNAL"
-                note  = f"RSI={current_rsi:.1f} — Strong momentum, good trend confirmation"
+                label = "STRONG SELL SIGNAL"
+                emoji = "🔥"
+                note  = "Strong momentum — full position ok"
             else:
-                label = "📉 WEAK SELL SIGNAL"
-                note  = f"RSI={current_rsi:.1f} — Crossover detected but momentum is low, trade with caution"
+                label = "WEAK SELL SIGNAL"
+                emoji = "📉"
+                note  = "Low momentum — reduce size, wait for TP1 first"
 
-            send(
-                f"{label}\n"
-                f"━━━━━━━━━━━━━━━━━━\n"
-                f"Pair:  XAUUSD\n"
-                f"Price: {current_price:.2f}\n"
-                f"SL:    {sl}\n"
-                f"TP:    {tp}\n"
-                f"━━━━━━━━━━━━━━━━━━\n"
-                f"{note}"
-            )
+            send(format_signal("SELL", label, emoji, current_price, sl, tp1, tp2, current_rsi, note))
 
-    # ── Strong trend alert (no crossover but strong momentum) ──
+    # ── Strong trend (no crossover yet) ──
     elif is_strong:
         direction = "BUY" if current_price > current_sma else "SELL"
         if last_signal != f"TREND_{direction}":
             last_signal = f"TREND_{direction}"
             emoji = "📈" if direction == "BUY" else "📉"
             send(
-                f"{emoji} STRONG TREND DETECTED — {direction}\n"
-                f"━━━━━━━━━━━━━━━━━━\n"
-                f"Price: {current_price:.2f}\n"
-                f"SMA:   {current_sma:.2f}\n"
-                f"RSI:   {current_rsi:.1f}\n"
-                f"ATR:   {current_atr:.2f}\n"
-                f"━━━━━━━━━━━━━━━━━━\n"
-                f"No crossover yet — monitor for entry"
+                f"{emoji} STRONG TREND — {direction}\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"Price:  {current_price:.2f}\n"
+                f"SMA:    {current_sma:.2f}\n"
+                f"RSI:    {current_rsi:.1f}\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"No crossover yet — watch for entry on pullback to SMA"
             )
 
 
@@ -214,7 +222,7 @@ def bot_loop():
     print("Bot started.")
     send(
         f"🤖 XAUUSD Signal Bot started\n"
-        f"Strategy: {SMA_PERIOD}-SMA crossover + ATR SL/TP + RSI filter\n"
+        f"Strategy: {SMA_PERIOD}-SMA + ATR + RSI\n"
         f"Checking every {CHECK_EVERY}s"
     )
 
@@ -236,14 +244,12 @@ def home():
 def status():
     return {"last_signal": last_signal}, 200
 
-
 def run():
     thread = threading.Thread(target=bot_loop, daemon=True)
     thread.start()
     port = int(os.getenv("PORT", 10000))
     print(f"Flask starting on port {port}...")
     app.run(host="0.0.0.0", port=port)
-
 
 if __name__ == "__main__":
     run()
