@@ -1,196 +1,177 @@
 import sys
 import os
-os.environ["PYTHONUNBUFFERED"] = "1"
 sys.stdout = sys.stderr
-"""
-XAUUSD Signal Bot (NO MT5)
---------------------------
-Generates trading signals only (BUY / SELL)
-Sends alerts via Telegram + Discord
+os.environ["PYTHONUNBUFFERED"] = "1"
 
-Requirements:
-pip install requests flask
-"""
-
-import os
+from flask import Flask
+import threading
 import time
 import requests
-from flask import Flask
 
 app = Flask(__name__)
 
-# ───────── CONFIG ─────────
-DISCORD_WEBHOOK = os.getenv("DISCORD_WEBHOOK", "")
+# ── CONFIG ───────────────────────────────────────────────────────────────────
+DISCORD_WEBHOOK = "https://discord.com/api/webhooks/1508337970099388417/WCRz7Gv0qK7B2rW0Gpy_6W486j5_vigNxhqM3eRuMVeeOZ1V--IeT35EEEUxe-i_zvkx"
 TELEGRAM_TOKEN  = os.getenv("TELEGRAM_TOKEN", "")
 CHAT_ID         = os.getenv("CHAT_ID", "")
 TWELVE_API_KEY  = os.getenv("TWELVE_API_KEY", "")
 
-SYMBOL        = "XAU/USD"
-INTERVAL      = "1min"
-
-SMA_PERIOD    = 20
-ATR_PERIOD    = 14
-
-CHECK_EVERY   = 60
-COOLDOWN      = 300
-
-last_signal = None
-last_time = 0
+SYMBOL         = "XAU/USD"
+INTERVAL       = "1min"
+SMA_PERIOD     = 20
+ATR_PERIOD     = 14
+ATR_SL_MULT    = 1.5
+ATR_TP_MULT    = 3.0
+CHECK_EVERY    = 60   # seconds
 
 
-# ───────── SEND ALERT ─────────
-def send(msg):
+# ── NOTIFICATIONS ─────────────────────────────────────────────────────────────
+
+def send(msg: str):
     print(msg)
-
     if DISCORD_WEBHOOK:
         try:
             requests.post(DISCORD_WEBHOOK, json={"content": msg}, timeout=5)
-        except:
-            pass
-
+        except Exception as e:
+            print(f"[Discord error] {e}")
     if TELEGRAM_TOKEN and CHAT_ID:
         try:
             url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
             requests.post(url, data={"chat_id": CHAT_ID, "text": msg}, timeout=5)
-        except:
-            pass
+        except Exception as e:
+            print(f"[Telegram error] {e}")
 
 
-# ───────── PRICE DATA ─────────
-def get_prices(n=100):
+# ── PRICE DATA ────────────────────────────────────────────────────────────────
+
+def get_prices(n: int = SMA_PERIOD + ATR_PERIOD + 5):
+    if not TWELVE_API_KEY:
+        print("[Error] TWELVE_API_KEY not set.")
+        return None
     url = "https://api.twelvedata.com/time_series"
-
     params = {
-        "symbol": SYMBOL,
-        "interval": INTERVAL,
+        "symbol":     SYMBOL,
+        "interval":   INTERVAL,
         "outputsize": n,
-        "apikey": TWELVE_API_KEY,
+        "apikey":     TWELVE_API_KEY,
     }
-
     try:
-        r = requests.get(url, params=params, timeout=10)
-        data = r.json()
-
-        if "values" not in data:
+        resp = requests.get(url, params=params, timeout=10)
+        data = resp.json()
+        if data.get("status") == "error":
+            print(f"[API error] {data.get('message')}")
             return None
-
-        bars = list(reversed(data["values"]))
-
-        closes = [float(x["close"]) for x in bars]
-        highs  = [float(x["high"]) for x in bars]
-        lows   = [float(x["low"]) for x in bars]
-
+        bars   = list(reversed(data["values"]))
+        closes = [float(b["close"]) for b in bars]
+        highs  = [float(b["high"])  for b in bars]
+        lows   = [float(b["low"])   for b in bars]
         return closes, highs, lows
-
-    except:
+    except Exception as e:
+        print(f"[Price fetch error] {e}")
         return None
 
 
-# ───────── INDICATORS ─────────
-def sma(data, period):
-    return sum(data[-period:]) / period
+# ── INDICATORS ────────────────────────────────────────────────────────────────
 
+def sma(prices, period):
+    return sum(prices[-period:]) / period
 
 def atr(highs, lows, closes, period):
     trs = []
-
-    for i in range(1, len(highs)):
+    for i in range(1, len(closes)):
         tr = max(
             highs[i] - lows[i],
             abs(highs[i] - closes[i - 1]),
-            abs(lows[i] - closes[i - 1]),
+            abs(lows[i]  - closes[i - 1]),
         )
         trs.append(tr)
-
-    if len(trs) < period:
-        return sum(trs) / len(trs)
-
     return sum(trs[-period:]) / period
 
 
-# ───────── SIGNAL ENGINE ─────────
-def check_signals():
-    global last_signal, last_time
+# ── SIGNAL LOGIC ──────────────────────────────────────────────────────────────
 
-    if time.time() - last_time < COOLDOWN:
+last_signal = None
+
+def check_signal():
+    global last_signal
+
+    result = get_prices()
+    if result is None:
         return
-
-    data = get_prices()
-    if not data:
-        return
-
-    closes, highs, lows = data
+    closes, highs, lows = result
 
     if len(closes) < SMA_PERIOD + ATR_PERIOD:
+        print("[Warning] Not enough data.")
         return
 
-    price = closes[-1]
-    prev  = closes[-2]
+    current_price = closes[-1]
+    prev_price    = closes[-2]
+    current_sma   = sma(closes, SMA_PERIOD)
+    prev_sma      = sma(closes[:-1], SMA_PERIOD)
+    current_atr   = atr(highs, lows, closes, ATR_PERIOD)
 
-    sma_now = sma(closes, SMA_PERIOD)
-    sma_prev = sma(closes[:-1], SMA_PERIOD)
+    sl_dist = current_atr * ATR_SL_MULT
+    tp_dist = current_atr * ATR_TP_MULT
 
-    atr_val = atr(highs, lows, closes, ATR_PERIOD)
+    sl_buy  = round(current_price - sl_dist, 2)
+    tp_buy  = round(current_price + tp_dist, 2)
+    sl_sell = round(current_price + sl_dist, 2)
+    tp_sell = round(current_price - tp_dist, 2)
 
-    sl = atr_val * 1.5
-    tp = atr_val * 3.0
-
-    # ───── BUY ─────
-    if prev <= sma_prev and price > sma_now:
+    if prev_price <= prev_sma and current_price > current_sma:
         if last_signal != "BUY":
             last_signal = "BUY"
-            last_time = time.time()
-
             send(
-                f"📈 BUY SIGNAL XAUUSD\n"
-                f"Entry: {price:.2f}\n"
-                f"SL: {price - sl:.2f}\n"
-                f"TP: {price + tp:.2f}"
+                f"📈 BUY XAUUSD @ {current_price:.2f}\n"
+                f"SL: {sl_buy}  |  TP: {tp_buy}\n"
+                f"SMA: {current_sma:.2f}  ATR: {current_atr:.2f}"
             )
 
-    # ───── SELL ─────
-    elif prev >= sma_prev and price < sma_now:
+    elif prev_price >= prev_sma and current_price < current_sma:
         if last_signal != "SELL":
             last_signal = "SELL"
-            last_time = time.time()
-
             send(
-                f"📉 SELL SIGNAL XAUUSD\n"
-                f"Entry: {price:.2f}\n"
-                f"SL: {price + sl:.2f}\n"
-                f"TP: {price - tp:.2f}"
+                f"📉 SELL XAUUSD @ {current_price:.2f}\n"
+                f"SL: {sl_sell}  |  TP: {tp_sell}\n"
+                f"SMA: {current_sma:.2f}  ATR: {current_atr:.2f}"
             )
 
+    else:
+        print(f"[No signal] Price={current_price:.2f}  SMA={current_sma:.2f}  ATR={current_atr:.2f}")
 
-# ───────── LOOP ─────────
-def loop():
-    send("Signal bot started (NO MT5)")
+
+# ── MAIN LOOP ─────────────────────────────────────────────────────────────────
+
+def bot_loop():
+    print("Bot started.")
+    send(f"🤖 XAUUSD Signal Bot started\nStrategy: {SMA_PERIOD}-SMA crossover + ATR SL/TP")
 
     while True:
         try:
-            check_signals()
+            check_signal()
         except Exception as e:
-            print("Error:", e)
-
+            print(f"[Loop error] {e}")
         time.sleep(CHECK_EVERY)
 
 
-# ───────── FLASK ─────────
+# ── FLASK ─────────────────────────────────────────────────────────────────────
+
 @app.route("/")
 def home():
-    return "Signal Bot Running"
-
+    return "Bot running", 200
 
 @app.route("/status")
 def status():
-    return {
-        "symbol": SYMBOL,
-        "signal": last_signal
-    }
+    return {"last_signal": last_signal}, 200
 
 
-# ───────── START ─────────
+def run():
+    thread = threading.Thread(target=bot_loop, daemon=True)
+    thread.start()
+    port = int(os.getenv("PORT", 10000))
+    print(f"Flask starting on port {port}...")
+    app.run(host="0.0.0.0", port=port)
+
+
 if __name__ == "__main__":
-    from threading import Thread
-    Thread(target=loop, daemon=True).start()
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
+    run()
