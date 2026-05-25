@@ -269,6 +269,7 @@ def update_win_rate(name, closes):
 
 # ── SIGNAL LOGIC ──────────────────────────────────────────────────────────────
 last_signals = {}
+last_update_time = 0
 
 def check_pair(pair):
     global last_update_time
