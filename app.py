@@ -19,8 +19,6 @@ PAIRS = [
     {"symbol": "EUR/USD", "name": "EURUSD"},
     {"symbol": "GBP/USD", "name": "GBPUSD"},
     {"symbol": "USD/JPY", "name": "USDJPY"},
-    {"symbol": "XAG/USD", "name": "XAGUSD"},
-    {"symbol": "BTC/USD", "name": "BTCUSD"},
 ]
 
 # Indicator settings
@@ -38,7 +36,7 @@ ATR_TP2_MULT   = 3.0
 SR_LOOKBACK    = 50    # candles to detect S/R
 SR_ZONE        = 0.3   # ATR multiplier for S/R zone width
 
-PAIR_DELAY     = 12    # seconds between pairs
+PAIR_DELAY     = 15    # seconds between pairs
 LOOP_SLEEP     = 60
 NEWS_WARN_MINS = 30
 
@@ -283,12 +281,8 @@ def check_pair(pair):
     # Update win tracker
     update_win_rate(name, closes_1m)
 
-    # Fetch 5min data (multi-timeframe)
-    time.sleep(2)
-    d5 = get_prices(symbol, "5min", 60)
-    closes_5m = d5[0] if d5 else None
-    highs_5m  = d5[1] if d5 else None
-    lows_5m   = d5[2] if d5 else None
+    # 5min fetch disabled to stay within free API rate limit
+    closes_5m, highs_5m, lows_5m = None, None, None
 
     price    = closes_1m[-1]
     prev     = closes_1m[-2]
@@ -594,3 +588,4 @@ def run():
 
 if __name__ == "__main__":
     run()
+
