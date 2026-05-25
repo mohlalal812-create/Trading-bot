@@ -1,3 +1,7 @@
+import sys
+import os
+os.environ["PYTHONUNBUFFERED"] = "1"
+sys.stdout = sys.stderr
 """
 XAUUSD Signal Bot (NO MT5)
 --------------------------
