@@ -11,108 +11,66 @@ from datetime import datetime, timezone
 
 app = Flask(__name__)
 
-# ── CONFIG ───────────────────────────────────────────────────────────────────
+# ───────────────── CONFIG ─────────────────
 DISCORD_WEBHOOK = os.getenv("DISCORD_WEBHOOK", "")
 TELEGRAM_TOKEN  = os.getenv("TELEGRAM_TOKEN", "")
 CHAT_ID         = os.getenv("CHAT_ID", "")
 TWELVE_API_KEY  = os.getenv("TWELVE_API_KEY", "")
 
-SYMBOL         = "XAU/USD"
-INTERVAL       = "1min"
-SMA_PERIOD     = 20
-ATR_PERIOD     = 14
-ATR_SL_MULT    = 1.5
-ATR_TP1_MULT   = 1.5
-ATR_TP2_MULT   = 3.0
-CHECK_EVERY    = 30
-STRONG_THRESH  = 0.4
-NEWS_WARN_MINS = 30
+SYMBOL = "XAU/USD"
+
+SMA_PERIOD = 20
+ATR_PERIOD = 14
+
+ATR_SL_MULT  = 1.6
+ATR_TP1_MULT = 1.8
+ATR_TP2_MULT = 3.2
+
+CHECK_EVERY = 30
+COOLDOWN = 300
 
 last_signal = None
-last_signal_time = 0
-SIGNAL_COOLDOWN = 300
+last_time = 0
 
-alerted_news = set()
+# ───────────────── SESSIONS ─────────────────
+def in_trading_session():
+    """
+    Simple institutional filter:
+    London + New York overlap (high volatility)
+    UTC time used.
+    """
+    hour = datetime.utcnow().hour
 
-# ── NOTIFICATIONS ─────────────────────────────────────────────────────────────
+    # London session: 07 - 16 UTC
+    # NY session: 12 - 21 UTC
+    return (7 <= hour <= 21)
 
-def send(msg: str):
+# ───────────────── SEND ─────────────────
+
+def send(msg):
     print(msg)
 
     if DISCORD_WEBHOOK:
         try:
             requests.post(DISCORD_WEBHOOK, json={"content": msg}, timeout=5)
-        except Exception as e:
-            print(f"[Discord error] {e}")
+        except:
+            pass
 
     if TELEGRAM_TOKEN and CHAT_ID:
         try:
             url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
             requests.post(url, data={"chat_id": CHAT_ID, "text": msg}, timeout=5)
-        except Exception as e:
-            print(f"[Telegram error] {e}")
-
-
-# ── NEWS ─────────────────────────────────────────────────────────────
-
-def fetch_news():
-    try:
-        url = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
-        return requests.get(url, timeout=10).json()
-    except:
-        return []
-
-def check_news():
-    events = fetch_news()
-    if not events:
-        return
-
-    now = datetime.now(timezone.utc)
-
-    for event in events:
-        if event.get("impact") != "High":
-            continue
-        if event.get("country", "").upper() != "USD":
-            continue
-
-        title = event.get("title", "")
-        date = event.get("date", "")
-        etime = event.get("time", "")
-
-        try:
-            dt_str = f"{date} {etime}"
-            event_dt = datetime.strptime(dt_str, "%Y-%m-%d %I:%M%p").replace(tzinfo=timezone.utc)
         except:
-            continue
-
-        mins_away = (event_dt - now).total_seconds() / 60
-
-        if 0 < mins_away <= NEWS_WARN_MINS:
-            key = f"{date}_{etime}_{title}"
-            if key in alerted_news:
-                continue
-
-            alerted_news.add(key)
-
-            send(
-                f"📰 NEWS ALERT\n"
-                f"Event: {title}\n"
-                f"Time: {etime} UTC (~{int(mins_away)}m)\n"
-                f"⚠️ Avoid trading around this time"
-            )
+            pass
 
 
-# ── PRICE DATA ─────────────────────────────────────────────────────────────
+# ───────────────── DATA ─────────────────
 
-def get_prices(n=60):
-    if not TWELVE_API_KEY:
-        print("Missing API key")
-        return None
-
+def get_tf(interval, n=80):
     url = "https://api.twelvedata.com/time_series"
     params = {
         "symbol": SYMBOL,
-        "interval": INTERVAL,
+        "interval": interval,
         "outputsize": n,
         "apikey": TWELVE_API_KEY,
     }
@@ -132,13 +90,13 @@ def get_prices(n=60):
         return None
 
 
-# ── INDICATORS (FIXED) ───────────────────────────────────────────────────────
+# ───────────────── INDICATORS ─────────────────
 
-def sma(prices, period):
-    return sum(prices[-period:]) / period
+def sma(prices, p):
+    return sum(prices[-p:]) / p
 
 
-def atr(highs, lows, closes, period=14):
+def atr(highs, lows, closes, p=14):
     trs = []
     for i in range(1, len(closes)):
         tr = max(
@@ -148,16 +106,15 @@ def atr(highs, lows, closes, period=14):
         )
         trs.append(tr)
 
-    atr_val = sum(trs[:period]) / period
-
-    for i in range(period, len(trs)):
-        atr_val = (atr_val * (period - 1) + trs[i]) / period
+    atr_val = sum(trs[:p]) / p
+    for i in range(p, len(trs)):
+        atr_val = (atr_val * (p - 1) + trs[i]) / p
 
     return atr_val
 
 
-def rsi(closes, period=14):
-    if len(closes) < period + 1:
+def rsi(closes, p=14):
+    if len(closes) < p + 1:
         return 50
 
     gains, losses = [], []
@@ -167,12 +124,12 @@ def rsi(closes, period=14):
         gains.append(max(diff, 0))
         losses.append(max(-diff, 0))
 
-    avg_gain = sum(gains[:period]) / period
-    avg_loss = sum(losses[:period]) / period
+    avg_gain = sum(gains[:p]) / p
+    avg_loss = sum(losses[:p]) / p
 
-    for i in range(period, len(gains)):
-        avg_gain = (avg_gain * (period - 1) + gains[i]) / period
-        avg_loss = (avg_loss * (period - 1) + losses[i]) / period
+    for i in range(p, len(gains)):
+        avg_gain = (avg_gain * (p - 1) + gains[i]) / p
+        avg_loss = (avg_loss * (p - 1) + losses[i]) / p
 
     if avg_loss == 0:
         return 100
@@ -181,125 +138,140 @@ def rsi(closes, period=14):
     return 100 - (100 / (1 + rs))
 
 
-# ── SIGNAL FORMAT ─────────────────────────────────────────────────────────────
+# ───────────────── STRUCTURE LOGIC ─────────────────
 
-def format_signal(direction, label, emoji, entry, sl, tp1, tp2, rsi_val, note):
-    return (
-        f"{emoji} {label}\n"
-        f"Pair: XAUUSD\n"
-        f"Action: {direction}\n"
-        f"Entry: {entry:.2f}\n"
-        f"SL: {sl:.2f}\n"
-        f"TP1: {tp1:.2f}\n"
-        f"TP2: {tp2:.2f}\n"
-        f"RSI: {rsi_val:.1f}\n"
-        f"Note: {note}"
-    )
+def liquidity_sweep(closes, highs, lows):
+    """
+    Basic sweep detection:
+    last candle breaks previous high/low but closes back inside.
+    """
+    if len(closes) < 3:
+        return None
+
+    prev_high = highs[-2]
+    prev_low = lows[-2]
+    last_close = closes[-1]
+    last_high = highs[-1]
+    last_low = lows[-1]
+
+    # bullish sweep (fake breakdown)
+    if last_low < prev_low and last_close > prev_low:
+        return "BUY"
+
+    # bearish sweep (fake breakout)
+    if last_high > prev_high and last_close < prev_high:
+        return "SELL"
+
+    return None
 
 
-# ── SIGNAL LOGIC (FIXED) ─────────────────────────────────────────────────────
+# ───────────────── SIGNAL ENGINE ─────────────────
 
 def check_signal():
-    global last_signal, last_signal_time
+    global last_signal, last_time
 
     now = time.time()
-    if now - last_signal_time < SIGNAL_COOLDOWN:
+    if now - last_time < COOLDOWN:
         return
 
-    result = get_prices()
-    if not result:
+    if not in_trading_session():
         return
 
-    closes, highs, lows = result
+    m1 = get_tf("1min")
+    m5 = get_tf("5min")
+    m15 = get_tf("15min")
 
-    if len(closes) < 50:
+    if not m1 or not m5 or not m15:
         return
 
-    current = closes[-1]
-    prev = closes[-2]
+    c1, h1, l1 = m1
+    c5, h5, l5 = m5
+    c15, h15, l15 = m15
 
-    sma_val = sma(closes, SMA_PERIOD)
-    atr_val = atr(highs, lows, closes, ATR_PERIOD)
-    rsi_val = rsi(closes)
+    price = c1[-1]
+    rsi_val = rsi(c1)
 
     if rsi_val > 70 or rsi_val < 30:
         return
 
-    candle_move = abs(current - prev)
-    strength = abs(current - sma_val) / atr_val if atr_val else 0
-    is_strong = candle_move > atr_val * STRONG_THRESH and strength > 0.8
+    atr_val = atr(h5, l5, c5, ATR_PERIOD)
+    if atr_val == 0:
+        return
 
-    trend_up = current > sma_val
-    prev_trend_up = prev > sma_val
+    trend_15 = "UP" if c15[-1] > sma(c15, SMA_PERIOD) else "DOWN"
+    trend_5  = "UP" if c5[-1] > sma(c5, SMA_PERIOD) else "DOWN"
+    trend_1  = "UP" if c1[-1] > sma(c1, SMA_PERIOD) else "DOWN"
 
-    sl_dist = atr_val * ATR_SL_MULT
-    tp1_dist = atr_val * ATR_TP1_MULT
-    tp2_dist = atr_val * ATR_TP2_MULT
+    sweep = liquidity_sweep(c1, h1, l1)
 
-    if not prev_trend_up and trend_up:
+    sl = atr_val * ATR_SL_MULT
+    tp1 = atr_val * ATR_TP1_MULT
+    tp2 = atr_val * ATR_TP2_MULT
+
+    bullish = trend_15 == "UP" and trend_5 == "UP" and trend_1 == "UP"
+    bearish = trend_15 == "DOWN" and trend_5 == "DOWN" and trend_1 == "DOWN"
+
+    # ── STRONG ENTRY RULES ──
+    if bullish and (sweep == "BUY" or rsi_val < 60):
         last_signal = "BUY"
-        last_signal_time = now
+        last_time = now
 
-        send(format_signal(
-            "BUY",
-            "BUY SIGNAL",
-            "📈",
-            current,
-            current - sl_dist,
-            current + tp1_dist,
-            current + tp2_dist,
-            rsi_val,
-            "Trend reversal confirmed"
-        ))
+        send(
+            f"🔥 INSTITUTIONAL BUY\n"
+            f"Price: {price:.2f}\n"
+            f"SL: {price - sl:.2f}\n"
+            f"TP1: {price + tp1:.2f}\n"
+            f"TP2: {price + tp2:.2f}\n"
+            f"RSI: {rsi_val:.1f}\n"
+            f"Reason: MTF + Liquidity Sweep"
+        )
 
-    elif prev_trend_up and not trend_up:
+    elif bearish and (sweep == "SELL" or rsi_val > 40):
         last_signal = "SELL"
-        last_signal_time = now
+        last_time = now
 
-        send(format_signal(
-            "SELL",
-            "SELL SIGNAL",
-            "📉",
-            current,
-            current + sl_dist,
-            current - tp1_dist,
-            current - tp2_dist,
-            rsi_val,
-            "Trend reversal confirmed"
-        ))
-
-    elif is_strong:
-        send(f"STRONG TREND {'BUY' if trend_up else 'SELL'} — waiting for pullback")
+        send(
+            f"🔥 INSTITUTIONAL SELL\n"
+            f"Price: {price:.2f}\n"
+            f"SL: {price + sl:.2f}\n"
+            f"TP1: {price - tp1:.2f}\n"
+            f"TP2: {price - tp2:.2f}\n"
+            f"RSI: {rsi_val:.1f}\n"
+            f"Reason: MTF + Liquidity Sweep"
+        )
 
 
-# ── LOOP ──────────────────────────────────────────────────────────────────────
+# ───────────────── LOOP ─────────────────
 
-def bot_loop():
-    send("Bot started")
+def loop():
+    send("🚀 Institutional MTF Bot Started")
 
     while True:
         try:
-            check_news()
             check_signal()
         except Exception as e:
-            print(e)
+            print("ERROR:", e)
 
         time.sleep(CHECK_EVERY)
 
 
-# ── FLASK ─────────────────────────────────────────────────────────────────────
+# ───────────────── FLASK ─────────────────
 
 @app.route("/")
 def home():
-    return "Bot running"
+    return "Institutional Bot Running", 200
+
 
 @app.route("/status")
 def status():
-    return {"last_signal": last_signal}
+    return {
+        "last_signal": last_signal,
+        "cooldown": COOLDOWN
+    }, 200
 
 
 def run():
-    threading.Thread(target=bot_loop, daemon=True).start()
+    threading.Thread(target=loop, daemon=True).start()
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
 
 
