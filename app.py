@@ -271,6 +271,7 @@ def update_win_rate(name, closes):
 last_signals = {}
 
 def check_pair(pair):
+    global last_update_time
     name, symbol = pair["name"], pair["symbol"]
 
     # Fetch 1min data
@@ -297,7 +298,6 @@ def check_pair(pair):
     trend = "↑" if fast_now > slow_now else "↓"
     print(f"[{name}] {price}  EMA9={fast_now:.5g}  EMA21={slow_now:.5g}  RSI={cur_rsi:.1f}  {trend}")
 
-    global last_update_time
     now_ts = time.time()
     if now_ts - last_update_time >= 1800:
         last_update_time = now_ts
