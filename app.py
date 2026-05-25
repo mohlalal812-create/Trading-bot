@@ -14,7 +14,7 @@ app = Flask(__name__)
 DISCORD_WEBHOOK = "https://discord.com/api/webhooks/1508337970099388417/WCRz7Gv0qK7B2rW0Gpy_6W486j5_vigNxhqM3eRuMVeeOZ1V--IeT35EEEUxe-i_zvkx"
 TELEGRAM_TOKEN  = os.getenv("TELEGRAM_TOKEN", "")
 CHAT_ID         = os.getenv("CHAT_ID", "")
-TWELVE_API_KEY  = os.getenv("TWELVE_API_KEY", "")
+TWELVE_API_KEY  = "286312c01d50410a9ee56a863143ad0f"
 
 SYMBOL         = "XAU/USD"
 INTERVAL       = "1min"
