@@ -20,15 +20,11 @@ TWELVE_API_KEY  = "286312c01d50410a9ee56a863143ad0f"
 # ── PAIRS ─────────────────────────────────────────────────────────────────────
 PAIRS = [
     {"symbol": "XAU/USD",  "name": "XAUUSD",  "pip": 2},
-    {"symbol": "XAG/USD",  "name": "XAGUSD",  "pip": 4},
     {"symbol": "EUR/USD",  "name": "EURUSD",  "pip": 5},
     {"symbol": "GBP/USD",  "name": "GBPUSD",  "pip": 5},
     {"symbol": "USD/JPY",  "name": "USDJPY",  "pip": 3},
-    {"symbol": "AUD/USD",  "name": "AUDUSD",  "pip": 5},
-    {"symbol": "USD/CAD",  "name": "USDCAD",  "pip": 5},
-    {"symbol": "USD/CHF",  "name": "USDCHF",  "pip": 5},
+    {"symbol": "XAG/USD",  "name": "XAGUSD",  "pip": 4},
     {"symbol": "BTC/USD",  "name": "BTCUSD",  "pip": 2},
-    {"symbol": "WTI/USD",  "name": "USOIL",   "pip": 2},
 ]
 
 INTERVAL       = "1min"
@@ -38,8 +34,8 @@ ATR_SL_MULT    = 1.5
 ATR_TP1_MULT   = 1.5
 ATR_TP2_MULT   = 3.0
 STRONG_THRESH  = 0.5
-PAIR_DELAY     = 6     # seconds between each pair check (stay under rate limit)
-LOOP_SLEEP     = 30    # seconds after full cycle before next round
+PAIR_DELAY     = 10     # seconds between each pair check (stay under rate limit)
+LOOP_SLEEP     = 60    # seconds after full cycle before next round
 NEWS_WARN_MINS = 30
 
 GOLD_BULLISH_ON_BEAT = ["cpi", "inflation", "pce", "unemployment claims", "jobless", "core inflation"]
